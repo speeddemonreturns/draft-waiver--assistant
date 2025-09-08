@@ -9,6 +9,7 @@ import streamlit as st
 # ---------------- Config ----------------
 DEFAULT_LEAGUE_ID = st.secrets.get("LEAGUE_ID", "cmdnhqw1s06g2kv0431dxfade")
 DEFAULT_TEAM_ID   = st.secrets.get("TEAM_ID",   "cmdofouqx0009jt04qjgcm5cn")
+DEFAULT_TEAM_NAME = st.secrets.get("TEAM_NAME", "")  # optional fallback
 
 CSV_URL   = "https://app.draftfantasy.com/api/players/csv"
 LIVE_URL  = "https://app.draftfantasy.com/api/league/{league_id}/transfers-data"
@@ -29,25 +30,37 @@ def fetch_live_league(league_id: str):
     # Build owner maps by NAME and by TEAM
     owner_by_name = {}
     players_by_team = {}
+    teams_index = []  # (teamId, teamName)
     for t in teams:
         tname = t.get("name") or t.get("teamName") or "-"
-        tid = str(t.get("id") or t.get("teamId") or "")
+        tid_raw = t.get("id") or t.get("teamId") or ""
+        tid = str(tid_raw).strip()
         roster = t.get("teamPlayers", []) or t.get("players", [])
+        teams_index.append((tid, tname))
         players_by_team[tid] = []
         for p in roster:
             pname = p.get("name") or p.get("playerName")
             if pname:
                 owner_by_name[normalize_name(pname)] = tname
                 players_by_team[tid].append(pname)
-    return owner_by_name, players_by_team
+    return owner_by_name, players_by_team, teams_index
 
-def build_my_squad_text(players_by_team, my_team_id: str):
-    # We only have names here; we’ll classify positions via the CSV
-    my_names = set(players_by_team.get(my_team_id, []))
-    if not my_names:
+def build_my_squad_text_from_names(names: list, df_pool: pd.DataFrame) -> str:
+    if not names:
         return ""
-    # Return as a simple flat list first; positions will be added via CSV cross join
-    return "\n".join(sorted(my_names))
+    df_my = df_pool[df_pool["Name"].isin(set(names))].copy()
+    lines = {
+        "GK": ", ".join(df_my[df_my["Position"]=="GK"]["Name"].tolist()),
+        "DEF": ", ".join(df_my[df_my["Position"]=="DEF"]["Name"].tolist()),
+        "MID": ", ".join(df_my[df_my["Position"]=="MID"]["Name"].tolist()),
+        "FWD": ", ".join(df_my[df_my["Position"]=="FWD"]["Name"].tolist()),
+    }
+    return "\n".join([
+        f"GK: {lines['GK']}",
+        f"DEF: {lines['DEF']}",
+        f"MID: {lines['MID']}",
+        f"FWD: {lines['FWD']}",
+    ])
 
 def build_prompt(df_available: pd.DataFrame, my_squad_text: str) -> str:
     top = df_available.sort_values("Point per game", ascending=False).head(25)
@@ -73,16 +86,17 @@ Who should I bring in this week and why?"""
 
 # ---------------- UI ----------------
 st.set_page_config(page_title="Draft Waiver Assistant", page_icon="⚽", layout="centered")
-st.title("FPL DraftFantasy — Waiver Assistant (LIVE)")
-st.caption("Now using /api/league/{league}/transfers-data • no caching • timestamp below")
+st.title("FPL DraftFantasy — Waiver Assistant (LIVE transfers-data)")
+st.caption("No caching • shows team IDs below for quick debugging")
 
 with st.expander("Settings", expanded=False):
     league_id = st.text_input("League ID", value=DEFAULT_LEAGUE_ID)
     team_id   = st.text_input("Team ID",   value=DEFAULT_TEAM_ID)
+    team_name_hint = st.text_input("Team name (optional fallback)", value=DEFAULT_TEAM_NAME)
 
 # Fetch live league ownership and rosters
 try:
-    owner_by_name, players_by_team = fetch_live_league(league_id)
+    owner_by_name, players_by_team, teams_index = fetch_live_league(league_id)
 except Exception as e:
     st.error(f"Could not fetch live league data: {e}")
     st.stop()
@@ -105,31 +119,30 @@ df_pool = df_pool.rename(columns={
     "Clean Sheets": "Clean sheets",
 })
 
+# Show available team IDs
+st.caption("Available team IDs in this league:")
+for tid, tname in teams_index:
+    st.caption(f"• {tname} → {tid}")
+
 # Ownership (LIVE) by name
 df_pool["Owner"] = df_pool["Name_norm"].map(owner_by_name).fillna("-")
 
-# Build 'My Squad' (classify by position using CSV after mapping)
-my_names_set = set(players_by_team.get(team_id, []))
-if my_names_set:
-    # Join to CSV to obtain positions
-    df_my = df_pool[df_pool["Name"].isin(my_names_set)].copy()
-    lines = {
-        "GK": ", ".join(df_my[df_my["Position"]=="GK"]["Name"].tolist()),
-        "DEF": ", ".join(df_my[df_my["Position"]=="DEF"]["Name"].tolist()),
-        "MID": ", ".join(df_my[df_my["Position"]=="MID"]["Name"].tolist()),
-        "FWD": ", ".join(df_my[df_my["Position"]=="FWD"]["Name"].tolist()),
-    }
-    my_squad_text = "\n".join([
-        f"GK: {lines['GK']}",
-        f"DEF: {lines['DEF']}",
-        f"MID: {lines['MID']}",
-        f"FWD: {lines['FWD']}",
-    ])
-else:
-    my_squad_text = ""
+# Locate your team robustly
+tid = str(team_id).strip()
+my_names = players_by_team.get(tid)
+
+# Fallback by team name (if provided)
+if (not my_names) and team_name_hint:
+    for t_tid, t_name in teams_index:
+        if t_name.strip().lower() == team_name_hint.strip().lower():
+            my_names = players_by_team.get(t_tid)
+            break
+
+# Build my squad text
+my_squad_text = build_my_squad_text_from_names(my_names or [], df_pool)
 
 st.subheader("Your Squad")
-st.text(my_squad_text if my_squad_text.strip() else "No players found for this Team ID. Double‑check Settings.")
+st.text(my_squad_text if my_squad_text.strip() else "No players found for this Team ID. Double‑check Settings or use the team name fallback.")
 
 # Available players = unowned (live)
 df_avail = df_pool[df_pool["Owner"] == "-"].copy()
