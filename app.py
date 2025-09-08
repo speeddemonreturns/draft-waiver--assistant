@@ -18,7 +18,6 @@ def normalize_name(s: str) -> str:
     s = re.sub(r"[^a-z]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
-@st.cache_data(ttl=300)  # 5 minutes cache
 def fetch_player_pool():
     r = requests.get(CSV_URL, timeout=20)
     r.encoding = "utf-8"
@@ -33,7 +32,6 @@ def fetch_player_pool():
     })
     return df
 
-@st.cache_data(ttl=60)  # draft can change more quickly
 def fetch_draft(league_id: str):
     r = requests.get(DRAFT_URL.format(league_id=league_id), timeout=20)
     data = r.json()
@@ -89,13 +87,13 @@ Who should I bring in this week and why?"""
 # ---------- UI ----------
 st.set_page_config(page_title="Draft Waiver Assistant", page_icon="⚽", layout="centered")
 st.title("FPL DraftFantasy — Waiver Assistant")
-st.caption("API-only • no Google auth • tuned for mobile")
+st.caption("Always live — cache removed")
 
 with st.expander("Settings", expanded=False):
     league_id = st.text_input("League ID", value=DEFAULT_LEAGUE_ID)
     team_id   = st.text_input("Team ID",   value=DEFAULT_TEAM_ID)
 
-# Fetch data
+# Fetch data (always live)
 try:
     df_pool = fetch_player_pool()
     picks   = fetch_draft(league_id)
@@ -107,7 +105,7 @@ except Exception as e:
 owner_map = build_owner_map(picks)
 df_pool["Owner"] = df_pool["Name_norm"].map(owner_map).fillna("-")
 
-# Available only (DraftFantasy doesn't expose 'Free/On waivers' separately)
+# Available only
 df_avail = df_pool[df_pool["Owner"] == "-"].copy()
 
 # Build your squad text
