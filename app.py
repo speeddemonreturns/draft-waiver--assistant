@@ -126,3 +126,8 @@ st.dataframe(df_avail.sort_values("Point per game", ascending=False).head(25)[co
 
 st.download_button("Download prompt (.txt)", data=prompt, file_name="waiver_prompt.txt", mime="text/plain")
 st.caption("Tip: in Safari → Share → Add to Home Screen for an app-like icon.")
+
+import time
+
+# Show build/run timestamp
+st.caption("⏱️ Last updated: " + time.strftime("%Y-%m-%d %H:%M:%S"))
